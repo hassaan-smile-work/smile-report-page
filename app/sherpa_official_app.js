@@ -463,6 +463,12 @@ async function cacheModel(url, buffer) {
 
 let activeModelDownloadPromise = null;
 
+// (Changed for the SMILE app.) The exact size of zipformer_p_arabic_v3.int8.onnx.
+// GitHub Pages compresses files and reports the compressed size, which made the
+// package's split download fetch only part of the file. A download is only
+// accepted when it is exactly this long. Change it if the model file changes.
+const EXPECTED_MODEL_BYTES = 72705392;
+
 // Fetches the ONNX model from a given URL and returns a Uint8Array
 window.fetchSherpaModel = async function(url) {
     // (Changed for the SMILE app: the package asks for '/download-model?model=NAME',
@@ -478,7 +484,7 @@ window.fetchSherpaModel = async function(url) {
         try {
             // 1. Check if we already downloaded it previously!
             const cachedBuffer = await getCachedModel(url);
-            if (cachedBuffer && cachedBuffer.byteLength > 50000000) { // Validate it's a full model (> 50MB)
+            if (cachedBuffer && cachedBuffer.byteLength === EXPECTED_MODEL_BYTES) { // Only a complete copy counts
                 console.log(`[Sherpa] Found model in IndexedDB (${cachedBuffer.byteLength} bytes). Bypassing download prompt!`);
                 return new Uint8Array(cachedBuffer);
             }
@@ -636,12 +642,11 @@ window.fetchSherpaModel = async function(url) {
             return assembled.buffer;
         }
 
-        let arrayBuffer;
-        try {
-            arrayBuffer = await downloadParallelStream(url, 4);
-        } catch(parallelErr) {
-            console.warn('[Sherpa] 4-Way parallel download encountered an error, falling back to single stream:', parallelErr);
-            arrayBuffer = await downloadSingleStream(url);
+        // (Changed for the SMILE app: one plain download, not the package's 4-way
+        // split, which breaks when the server compresses the file.)
+        const arrayBuffer = await downloadSingleStream(url);
+        if (arrayBuffer.byteLength !== EXPECTED_MODEL_BYTES) {
+            throw new Error('The model download was incomplete (' + arrayBuffer.byteLength + ' of ' + EXPECTED_MODEL_BYTES + ' bytes).');
         }
 
         const fill = document.getElementById('progress-bar-fill');
