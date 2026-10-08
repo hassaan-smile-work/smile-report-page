@@ -43,6 +43,11 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
+  <!-- The recitation listening engine (from the recite_quran package's web example). -->
+  <script src="sherpa-onnx-asr.js"></script>
+  <script src="sherpa_official_app.js"></script>
+  <script src="assets/packages/sherpa_onnx_web/assets/sherpa-onnx-wasm-web.js"></script>
+  <script>SherpaOnnx(Module);</script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
