@@ -46,6 +46,9 @@ window.isWasmModuleLoaded = function() {
 
 // Called by Dart to write the asset bytes directly into the WASM filesystem
 window.writeSherpaAssetToVFS = function(filename, bytes) {
+    // (Changed for the SMILE app: once the recognizer exists, the model and token
+    // files have already been used, so there is nothing to write again.)
+    if (isRecognizerReady && recognizer) return true;
     try {
         const fullPath = '/' + filename;
         if (Module.FS) {
@@ -76,6 +79,9 @@ window.writeSherpaAssetToVFS = function(filename, bytes) {
 
 // Called by Dart after writing the model files to initialize the engine
 window.initSherpaRecognizer = function(modelFilename) {
+    // (Changed for the SMILE app: a practice screen opened later reuses the
+    // recognizer that is already loaded, instead of building another one.)
+    if (isRecognizerReady && recognizer) return true;
     try {
         if (modelFilename) {
             Module.modelPath = modelFilename.startsWith('./') ? modelFilename : ('./' + modelFilename);
@@ -425,6 +431,29 @@ async function getCachedModel(url) {
     } catch(e) { return null; }
 }
 
+// The size noted beside the saved model, or null.
+async function getCachedModelSize(url) {
+    try {
+        const db = await openDB();
+        return new Promise((resolve) => {
+            const req = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(url + '#size');
+            req.onsuccess = () => resolve(req.result == null ? null : req.result);
+            req.onerror = () => resolve(null);
+        });
+    } catch (e) { return null; }
+}
+
+async function putCachedModelSize(url, size) {
+    try {
+        const db = await openDB();
+        return new Promise((resolve) => {
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            tx.objectStore(STORE_NAME).put(size, url + '#size');
+            tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
+        });
+    } catch (e) { /* not important */ }
+}
+
 async function ensurePersistentStorage() {
     try {
         if (navigator.storage && navigator.storage.persist) {
@@ -445,6 +474,9 @@ async function cacheModel(url, buffer) {
                 const store = tx.objectStore(STORE_NAME);
                 store.clear();
                 const req = store.put(buffer, url);
+                // (Changed for the SMILE app: a tiny note of the model's size, so
+                // "is it saved?" can be answered without reading 70 MB.)
+                store.put(buffer.byteLength, url + '#size');
                 tx.oncomplete = () => {
                     ensurePersistentStorage();
                     resolve();
@@ -471,6 +503,9 @@ const EXPECTED_MODEL_BYTES = 72705392;
 
 // Fetches the ONNX model from a given URL and returns a Uint8Array
 window.fetchSherpaModel = async function(url) {
+    // (Changed for the SMILE app: with the recognizer already loaded, the model
+    // is not needed again. A one-byte stand-in keeps the caller happy.)
+    if (isRecognizerReady && recognizer) return new Uint8Array(1);
     // (Changed for the SMILE app: the package asks for '/download-model?model=NAME',
     // an address on its author's server. Our copy of the model sits next to the
     // app, in the assets folder.)
@@ -486,6 +521,7 @@ window.fetchSherpaModel = async function(url) {
             const cachedBuffer = await getCachedModel(url);
             if (cachedBuffer && cachedBuffer.byteLength === EXPECTED_MODEL_BYTES) { // Only a complete copy counts
                 console.log(`[Sherpa] Found model in IndexedDB (${cachedBuffer.byteLength} bytes). Bypassing download prompt!`);
+                putCachedModelSize(url, cachedBuffer.byteLength);
                 return new Uint8Array(cachedBuffer);
             }
 
@@ -705,4 +741,29 @@ window.fetchSherpaModel = async function(url) {
 
 // (Changed for the SMILE app: the model is only downloaded when a practice screen
 // asks for it, not when the page opens.)
+
+// (Added for the SMILE app.) Quietly saves the model on the device ahead of the
+// first practice, so tapping Practice later does not wait for a 55 MB download.
+// It skips itself when the model is already saved, when the recognizer is
+// already loaded, and when the phone is on mobile data or Data Saver (the
+// practice screen then downloads it on demand, as before). It never holds the
+// 72 MB in memory afterwards.
+window.prefetchSherpaModel = async function() {
+    try {
+        ensurePersistentStorage();
+        if (isRecognizerReady) return;
+        const connection = navigator.connection;
+        if (connection && (connection.saveData || connection.type === 'cellular')) return;
+
+        const url = new URL('assets/assets/model/zipformer_p_arabic_v3.int8.onnx', document.baseURI).href;
+        if ((await getCachedModelSize(url)) === EXPECTED_MODEL_BYTES) return;
+
+        await window.fetchSherpaModel('/download-model?model=zipformer_p_arabic_v3.int8.onnx');
+    } catch (e) {
+        console.warn('[Sherpa] Background model download did not finish:', e);
+    } finally {
+        // Let go of the model bytes; the practice screen asks again when needed.
+        if (!isRecognizerReady) activeModelDownloadPromise = null;
+    }
+};
 
